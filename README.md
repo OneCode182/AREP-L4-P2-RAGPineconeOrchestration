@@ -5,7 +5,7 @@
 ![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?logo=openai&logoColor=white)
 ![Pinecone](https://img.shields.io/badge/Pinecone-Serverless-000000?logo=pinecone&logoColor=white)
 
-> Retrieval-Augmented Generation pipeline: document ingestion, vector indexing with Pinecone, and context-aware generation using OpenAI.
+> Retrieval-Augmented Generation pipeline: document ingestion, vector indexing with Pinecone, and context-aware generation using GPT-4o-mini via GitHub Models.
 
 ---
 
@@ -16,16 +16,16 @@
 - [Architecture](#architecture)
 - [Setup & Installation](#setup--installation)
 - [Notebook Walkthrough](#notebook-walkthrough)
+- [Execution Results](#execution-results)
 - [Theoretical Background](#theoretical-background)
 - [RAG Pipeline Details](#rag-pipeline-details)
-- [AWS SageMaker Execution Evidence](#aws-sagemaker-execution-evidence)
 - [References](#references)
 
 ---
 
 ## Overview
 
-This repository implements a complete **Retrieval-Augmented Generation (RAG)** pipeline. The system ingests a web document, chunks it, stores embeddings in **Pinecone**, and uses an **LLM agent** to answer queries with retrieved context.
+This repository implements a complete **Retrieval-Augmented Generation (RAG)** pipeline. The system ingests a web document, chunks it, stores embeddings in **Pinecone**, and uses an **LCEL RAG chain** to answer queries with retrieved context.
 
 > [!IMPORTANT]
 > This is the second of two repositories for Lab 04. The first repo covers LangChain basics; this repo builds the **full RAG system** with Pinecone as the vector store.
@@ -34,8 +34,8 @@ This repository implements a complete **Retrieval-Augmented Generation (RAG)** p
 |:-------|:------------|
 | **Domain** | Information Retrieval & NLP |
 | **Task** | Retrieval-Augmented Generation |
-| **LLM** | OpenAI `gpt-4o-mini` |
-| **Embeddings** | OpenAI `text-embedding-3-small` (1536 dims) |
+| **LLM** | `gpt-4o-mini` via GitHub Models (FREE) |
+| **Embeddings** | `all-MiniLM-L6-v2` local HuggingFace (384 dims, FREE) |
 | **Vector Store** | Pinecone Serverless (AWS `us-east-1`) |
 | **Data Source** | [LLM Powered Autonomous Agents](https://lilianweng.github.io/posts/2023-06-23-agent/) — Lilian Weng |
 
@@ -72,7 +72,7 @@ The RAG pipeline consists of two distinct phases:
                     │  RecursiveCharacterTextSplitter  │
                     │    │                             │
                     │    ▼                             │
-                    │  OpenAI Embeddings               │
+                    │  HuggingFace Embeddings (Local)  │
                     │    │                             │
                     │    ▼                             │
                     │  Pinecone Vector Store           │
@@ -84,13 +84,11 @@ The RAG pipeline consists of two distinct phases:
                     │  User Query                      │
                     │    │                             │
                     │    ▼                             │
-                    │  @tool retrieve_context()        │
+                    │  Retriever (similarity, k=3)     │
                     │    │                             │
                     │    ▼                             │
-                    │  similarity_search(query, k=2)   │
-                    │    │                             │
-                    │    ▼                             │
-                    │  LLM Agent (gpt-4o-mini)         │
+                    │  LCEL RAG Chain                  │
+                    │  (retriever | prompt | LLM)      │
                     │    │                             │
                     │    ▼                             │
                     │  Context-Aware Response          │
@@ -103,10 +101,10 @@ The RAG pipeline consists of two distinct phases:
 |:------|:-----|:----------|:--------|
 | **Indexing** | Load | `WebBaseLoader` | Fetches HTML, filters with BS4 |
 | **Indexing** | Split | `RecursiveCharacterTextSplitter` | 1000-char chunks, 200 overlap |
-| **Indexing** | Embed | `OpenAIEmbeddings` | Converts text → 1536-dim vectors |
+| **Indexing** | Embed | `HuggingFaceEmbeddings` | Converts text → 384-dim vectors (local) |
 | **Indexing** | Store | `PineconeVectorStore` | Persists embeddings in Pinecone |
-| **Retrieval** | Search | `similarity_search()` | Cosine similarity, top-k results |
-| **Generation** | Answer | `create_agent()` | LLM with retrieval tool |
+| **Retrieval** | Search | `as_retriever(k=3)` | Cosine similarity, top-k results |
+| **Generation** | Answer | LCEL RAG Chain | `retriever | prompt | model | parser` |
 
 ---
 
@@ -116,7 +114,7 @@ The RAG pipeline consists of two distinct phases:
 
 - **Python 3.11+**
 - **Jupyter Notebook / Lab**
-- **OpenAI API Key** ([Get one here](https://platform.openai.com/api-keys))
+- **GitHub Token** (Fine-grained PAT for GitHub Models — FREE)
 - **Pinecone API Key** ([Get one here](https://app.pinecone.io/))
 
 ### Install Dependencies
@@ -134,23 +132,25 @@ langchain-openai>=0.3.0
 langchain-pinecone>=0.2.0
 langchain-community>=0.3.0
 langchain-text-splitters>=0.3.0
+langchain-huggingface>=0.1.0
 pinecone>=5.0.0
 beautifulsoup4>=4.12.0
+sentence-transformers>=3.0.0
 ```
 
 </details>
 
 ### API Key Setup
 
-The notebook uses `getpass` to securely prompt for API keys at runtime:
+The notebook uses `getpass` to securely prompt for keys at runtime:
 
 | Key | Required For | How to Get |
 |:----|:-------------|:-----------|
-| `OPENAI_API_KEY` | LLM + Embeddings | [platform.openai.com](https://platform.openai.com/api-keys) |
+| `GITHUB_TOKEN` | LLM (gpt-4o-mini) | [github.com/settings/tokens](https://github.com/settings/tokens) |
 | `PINECONE_API_KEY` | Vector Store | [app.pinecone.io](https://app.pinecone.io/) |
 
 > [!TIP]
-> No keys are stored in the code. The notebook prompts you at execution time.
+> No OpenAI API key is needed. The LLM is accessed for FREE via GitHub Models using your GitHub token.
 
 ### Run the Notebook
 
@@ -165,15 +165,46 @@ jupyter notebook rag_langchain_pinecone.ipynb
 | # | Section | Description | Key API |
 |:-:|:--------|:------------|:--------|
 | 1 | Setup | Install packages, configure API keys | `getpass` |
-| 2 | Components | Initialize LLM + Embeddings | `init_chat_model`, `OpenAIEmbeddings` |
-| 3 | Pinecone Config | Create/connect serverless index | `Pinecone`, `ServerlessSpec` |
+| 2 | Components | Initialize LLM + Embeddings | `ChatOpenAI`, `HuggingFaceEmbeddings` |
+| 3 | Pinecone Config | Create/connect serverless index (384 dims) | `Pinecone`, `ServerlessSpec` |
 | 4.1 | Load Documents | Fetch blog post via web scraping | `WebBaseLoader`, `BeautifulSoup` |
 | 4.2 | Split Documents | Chunk into 1000-char segments | `RecursiveCharacterTextSplitter` |
 | 4.3 | Store Vectors | Index all chunks in Pinecone | `PineconeVectorStore.add_documents()` |
 | 5.1 | Similarity Search | Direct vector search demo | `similarity_search()` |
-| 5.2 | RAG Agent | Create agent with retrieval tool | `@tool`, `create_agent()` |
-| 5.3 | Query Demo | Ask questions about the blog post | `agent.stream()` |
+| 5.2 | RAG Chain | Build LCEL chain with retriever | `RunnablePassthrough`, `StrOutputParser` |
+| 5.3 | Query Demo | Ask questions about the blog post | `rag_chain.invoke()` |
 | 6 | Cleanup | Optional: delete Pinecone index | `pc.delete_index()` |
+
+---
+
+## Execution Results
+
+All cells executed successfully with Python 3.11.
+
+### Cell Outputs Summary
+
+| Cell | Output |
+|:-----|:-------|
+| **2. Components** | `LLM: GitHub Models (gpt-4o-mini)` · `Embeddings: Local HuggingFace (all-MiniLM-L6-v2)` |
+| **3. Pinecone** | `Index already exists: arep-lab04-rag-local` · `Vector store ready.` |
+| **4.1 Load** | `Loaded 1 document(s)` · `Total characters: 43047` |
+| **4.2 Split** | `Split into 63 chunks` |
+| **4.3 Store** | `Indexed 63 documents in Pinecone` |
+| **5.1 Search** | 3 results returned for *"What is task decomposition?"* |
+| **5.2 RAG Chain** | `RAG chain ready.` |
+| **5.3 Query** | See below |
+
+### Query Demo Output
+
+**Query:** *"What is task decomposition?"*
+
+**Response:**
+> Task decomposition is the process of breaking down a larger task into smaller, manageable sub-tasks or steps. This can be done in several ways, including:
+> 1. Using a language model (LLM) with simple prompting, such as asking for steps or subgoals for achieving a specific task.
+> 2. Providing task-specific instructions, like asking for a story outline when writing a novel.
+> 3. Involving human inputs to guide the breakdown of the task.
+>
+> Additionally, there is an approach known as LLM+P, which involves using an external classical planner for long-horizon planning. This approach utilizes the Planning Domain Definition Language (PDDL) to describe the planning problem, where the LLM translates the problem into PDDL, requests a planner to generate a PDDL plan, and then translates the plan back into natural language.
 
 ---
 
@@ -191,8 +222,6 @@ jupyter notebook rag_langchain_pinecone.ipynb
 
 ### Why Pinecone?
 
-Pinecone is a managed vector database optimized for similarity search:
-
 | Feature | Benefit |
 |:--------|:--------|
 | **Serverless** | No infrastructure management |
@@ -200,15 +229,14 @@ Pinecone is a managed vector database optimized for similarity search:
 | **Scalable** | Handles millions of vectors |
 | **Low Latency** | Sub-100ms queries |
 
-### Embedding Dimensions
+### Embedding Model
 
-| Model | Dimensions | Use Case |
-|:------|:-----------|:---------|
-| `text-embedding-3-small` | 1536 | Cost-efficient, general purpose |
-| `text-embedding-3-large` | 3072 | Higher accuracy, more expensive |
+| Model | Dimensions | Cost | Use Case |
+|:------|:-----------|:-----|:---------|
+| `all-MiniLM-L6-v2` | 384 | FREE (local) | Lightweight, fast, good accuracy |
 
 > [!IMPORTANT]
-> The Pinecone index dimension **must match** the embedding model dimension. This project uses `text-embedding-3-small` (1536 dims).
+> The Pinecone index dimension **must match** the embedding model dimension. This project uses `all-MiniLM-L6-v2` (384 dims).
 
 ---
 
@@ -226,43 +254,26 @@ The pipeline indexes Lilian Weng's blog post [*LLM Powered Autonomous Agents*](h
 | `chunk_overlap` | 200 chars | Preserves context at boundaries |
 | `add_start_index` | `True` | Enables source tracking |
 
-### Agent Pattern
+### RAG Chain Pattern (LCEL)
 
-The RAG agent uses LangChain's **tool-calling** pattern:
+The RAG chain uses LangChain's **Expression Language (LCEL)**:
 
 1. User sends a query
-2. Agent decides to call `retrieve_context` tool
-3. Tool performs `similarity_search(query, k=2)` on Pinecone
-4. Results are returned as `ToolMessage` with content + artifacts
-5. Agent synthesizes a final response using the retrieved context
-
----
-
-## AWS SageMaker Execution Evidence
-
-> [!NOTE]
-> This section contains evidence of successful notebook execution on AWS SageMaker.
-
-### Deployment Steps
-
-1. Navigate to AWS SageMaker Studio
-2. Create a new Notebook Instance
-3. Upload `rag_langchain_pinecone.ipynb` and `src/` directory
-4. Select Python 3 (Data Science) kernel
-5. Provide API keys when prompted
-6. Run all cells
-
-<!-- Screenshots to be added after SageMaker execution -->
+2. `retriever` performs `similarity_search(query, k=3)` on Pinecone
+3. `format_docs` joins retrieved documents into a context string
+4. `ChatPromptTemplate` builds the prompt with context + question
+5. `model` (GPT-4o-mini) generates the response
+6. `StrOutputParser` extracts the final text
 
 ---
 
 ## References
 
-1. LangChain Documentation. [Build a RAG Agent](https://python.langchain.com/docs/tutorials/rag/).
+1. LangChain Documentation. [Build a RAG App](https://python.langchain.com/docs/tutorials/rag/).
 2. LangChain Documentation. [Pinecone Integration](https://python.langchain.com/docs/integrations/vectorstores/pinecone).
 3. Weng, L. (2023). [LLM Powered Autonomous Agents](https://lilianweng.github.io/posts/2023-06-23-agent/).
 4. Pinecone Documentation. [Quickstart Guide](https://docs.pinecone.io/guides/get-started/quickstart).
-5. OpenAI. [Embeddings Guide](https://platform.openai.com/docs/guides/embeddings).
+5. HuggingFace. [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2).
 
 ---
 
